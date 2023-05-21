@@ -1,0 +1,1231 @@
+\documentclass[12pt]{article}
+\usepackage{amsmath, amssymb, amsfonts, bm}
+\usepackage[pdftitle={knitRdemo}, colorlinks=false, linkcolor=blue,
+citecolor=blue, urlcolor=blue, linktocpage=true, breaklinks=true]{hyperref}
+\usepackage[margin=1in]{geometry}
+\usepackage{pdflscape}
+\usepackage{url}
+\usepackage{wrapfig}
+\usepackage{booktabs}
+\usepackage{float}
+
+\begin{document}
+
+\title{\textbf {Bayesian Heart Failure Survival Analysis with Parametric Cox Proportional Hazard Regression}}
+\author{
+		Hanning Su \\
+        Student ID: hs3375\\
+}
+\maketitle
+
+\section{Introduction}
+In this project, we conduct bayesian analysis with Weibull baseline Cox proportional hazard model.
+
+\subsection{Model derivation}
+Suppose for $i \in {1,...,n}$, $\mathbf{Z}_i$ is covariate vector for subject i, and $\mathbf{Z}_i = (Z_{i1},..., Z_{ip})^T$, we let
+$$T_i|\mathbf{Z}_i \overset {ind}\sim\text{Weibull}(\alpha, \lambda_i)$$ with hazard:
+$$h(t|\mathbf{Z}_i) = \lambda_i \alpha t^{\alpha - 1}$$
+, where $\lambda_i$ depends on $\mathbf{Z}_i$.
+
+Let $\mu_i = -\sigma \log{\lambda_i}$ and $\sigma = 1/ \alpha$, then $$Y_i = \log{T_i} = \mu_i + \sigma W_i$$, where $\mu_i := \tilde{\mu} + \mathbf{\gamma}^T\mathbf{Z}_i$ and $W \overset {iid}\sim \text{standard Gumbel(minimum)}$ with pdf $f_{W_i}(w) = e^{w - e^w}$.\\
+Thus, we have $$Y_i = \tilde{\mu} + \mathbf{\gamma}^T\mathbf{Z}_i + \sigma W_i$$, where $\mathbf{\gamma} = (\gamma_1, ..., \gamma_p)^T$.\\
+This leads to a proportional hazard model for $T_i$ with a Weibull baseline hazard (Klein and Moeschberger, 2003):
+$$h(t|\mathbf{Z}_i) = \alpha t^{\alpha-1} \tilde{\lambda} \exp{(\mathbf{\beta}^T \mathbf{Z}_i)}$$, where $\alpha = 1/\sigma$, $\tilde{\lambda} = \exp{(-\tilde{\mu}/\sigma
+)}$, $\mathbf{\beta} = (\beta_1, ..., \beta_p)^T$, and $\beta_j = -\gamma_j / \sigma$.\\
+If we let $\beta_0 = -\tilde{\mu}/\sigma$, we can write (corresponding to Brillemann et al. 2020):
+$$h(t|\mathbf{Z}_i) =\alpha t^{\alpha - 1} \exp{(\beta_0 + \beta_1 Z_{i1} + \beta_2 Z_{i2} + ... + \beta_p Z_{ip})}  \ \ \ (*)$$
+We use (*) to conduct our Bayesian analysis.
+
+Since the dataset we adopted has right censoring, in order to use Stan and analyze survival curves later, we need to derive the explicit form of CDF and pdf and other characterizing functions of $T_i$ corresponding to (*):\\
+\textbf{Cumulative hazard}: $$H(t|\mathbf{Z}_i) = \int_{0}^{t} \alpha r^{\alpha - 1} \exp{(\beta_0 + \mathbf{\beta}^T\mathbf{Z}_i}) \,dr = t^{\alpha} \exp{(\beta_0 + \mathbf{\beta}^T\mathbf{Z}_i)}$$
+\textbf{Survival function}:
+$$S(t| \mathbf{Z}_i) = \exp(-H(t|\mathbf{Z}_i)) = \exp{(-t^{\alpha} \exp{(\beta_0 + \mathbf{\beta}^T\mathbf{Z}_i)})}$$
+\textbf{CDF}:
+$$F(t| \mathbf{Z}_i) = 1 -  \exp{(-t^{\alpha} \exp{(\beta_0 + \mathbf{\beta}^T\mathbf{Z}_i)})}$$
+\textbf{pdf}:
+$$f(t| \mathbf{Z}_i) = \alpha t^{\alpha-1} \exp{(\beta_0 + \mathbf{\beta}^T\mathbf{Z}_i)}  \exp{(-t^{\alpha} \exp{(\beta_0 + \mathbf{\beta}^T\mathbf{Z}_i)})}$$
+
+For diffuse priors, we use the options mentioned by Brillemann et al. (2020):
+$$\beta_1, \beta_2, ..., \beta_p \sim N(0, 20)$$
+$$\beta_0 \sim \text{Cauchy}(0, 20)$$
+$$\alpha \sim \text{Half-normal}(0, 10)$$
+
+For concentrated priors, we will run a frequentist Cox regression and design based on the result. We will elaborate on this in later section.
+
+\subsection{Research questions}
+1. Finding out the significant factors that significantly impact the hazard of mortality of a heart failure patient.\\
+2. We want to draw posterior (mean overlayed on top on all the posterior possibile) survival curves for "typical" patients (discussed in detail later) at different levels of ejection fraction(EF) (i.e. $\text{EF} \leq 30$, $30<\text{EF} \leq 45$ and $\text{EF}>45$) based on the posterior samples of $\beta_0, \beta_1, ..., \beta_p$ and $\alpha$. \\
+3. We have two pairs of typical patients, i.e. typical male and typical female, typical smoker and typical non-smoker. Based on posterior predicted survival times $T$, We want to find out the probabilities that a typical male outlives a typical female and that a typical smoking patient outlives a typical non-smoking patient. For further comparison, we also report the predicted mean survival times for all the typical individuals.
+
+We emphasize EF in our analysis. Here is some further information about this varible by Ahmed et al. (2017):
+"Ejection fraction is an important measurement of how well one’s heart is pumping and is used to help classify heart failure and guide treatment. The EF is also found to be significant correlate of deaths among heart failure patients from Cox regression for present sample."
+
+\subsection{Dataset introduction}
+I direct quote the paper of Ahmed et al. (2017)
+"Current study is based on 299 patients of heart failure comprising of 105 women and 194 men. All the patients were more than 40 years old, having left ventricular systolic dysfunction and falling in NYHA class III and IV. Follow up time was 4–285 days with an average of 130 days. Disease was diagnosed by cardiac echo report or notes written by physician. Age, serum sodium, serum creatinine, gender, smoking, Blood Pressure (BP), Ejection Fraction (EF), anemia, platelets, Creatinine Phosphokinase (CPK) and diabetes were considered as potential variables explaining mortality caused by CHD. Age, serum sodium and CPK are continuous variables whereas EF, serum creatinine and platelets were taken as categorical variables. EF was divided into three levels (i.e. $\text{EF} \leq 30$, $30<\text{EF} \leq 45$ and $\text{EF}>45$) and platelets was also divided into three level on the basis of quartiles. Serum creatinine greater than its normal level (1.5) is an indicator of renal dysfunction. Its effect on mortality was studied as creatinine $>1.5$ vs $\leq1.5$. Anemia in patients was assessed by their haematocrit level. Following McClellan et al. [4] the patients with haematocrit less than 36 (minimum normal level of haematocrit) were taken as anemic. The information related to risk factors were taken from blood reports while smoking status and blood pressure were taken from physician’s notes."
+
+\section{Model fitting with diffuse prior and analysis}
+
+<<echo = TRUE, tidy=TRUE, cache=TRUE>>=
+Heart <- read.csv("Heart_cox.csv")[,-c(1,12)]
+
+N_censored <- sum(Heart$Event == 0)
+N_uncensored <- sum(Heart$Event == 1)
+
+Times_censored <- Heart[Heart$Event == 0, ]$TIME
+Times_uncensored <- Heart[Heart$Event == 1, ]$TIME
+
+Z_censored <- as.matrix(Heart[Heart$Event == 0, ][,-c(1,2)])
+Z_uncensored <- as.matrix(Heart[Heart$Event == 1, ][,-c(1,2)])
+
+N_predictors <- dim(Z_censored)[2]
+
+scale_alpha <- 10
+scale_beta <- 20
+@
+
+We define 
+$$\mathbf{x} = (\text{Gender}, \text{Smoking}, \text{Diabetes}, \text{BP}, \text{Anaemia}, \text{Age}, \text{Sodium}, \text{Creatinine}, \text{log\_CPK}, $$ $$\text{PleteletsleqQ1}, \text{PleteletsgeqQ3})^T$$
+
+In the following section, we want to find some "typical" patients. To be specific,  we want to find 4 sets (indexed by 1, 2, 3, and 4) of covaraites representing typical male, female, smoking, and non-smoking patients respectively. \\
+For a continuous variable, by typical, we mean it takes an average value. For categorical variable, by typical, we mean it takes on the label of the majority class. 
+
+
+<<echo = TRUE, tidy=TRUE, cache=TRUE>>=
+Heart_factor <- Heart
+Heart_factor$Gender <- as.factor(Heart$Gender)
+Heart_factor$Smoking <- as.factor(Heart$Smoking)
+Heart_factor$Diabetes <- as.factor(Heart$Diabetes)
+Heart_factor$BP <- as.factor(Heart$BP)
+Heart_factor$Anaemia <- as.factor(Heart$Anaemia)
+Heart_factor$PleteletsleqQ1 <- as.factor(Heart$PleteletsleqQ1)
+Heart_factor$PleteletsgeqQ3 <- as.factor(Heart$PleteletsgeqQ3)
+
+# Gender = 1 corresponds to being male (#male = 194)
+summary(Heart_factor[Heart$Gender == 1,][,-c(1,2,3,11,12)])
+# Gender = 0 corresponds to being female (#male = 105)
+summary(Heart_factor[Heart$Gender == 0,][,-c(1,2,3,11,12)])
+
+# Gender = 1 corresponds to smoker (#Smoking = 96)
+summary(Heart_factor[Heart$Smoking == 1,][,-c(1,2,4,11,12)])
+# Gender = 0 corresponds to being female (#non-smoking = 203)
+summary(Heart_factor[Heart$Smoking == 0,][,-c(1,2,4,11,12)])
+@
+
+Our "typical" patients are represented below:
+$$\mathbf{x}_{\text{typ1}} = (1,0,0,0,0,61.41, 136.5, 1.399, 5.686,0,0)^T$$
+$$\mathbf{x}_{\text{typ2}} = (0,0,1,0,0,59.78, 136.8, 1.384, 5.612,0,0)^T$$
+$$\mathbf{x}_{\text{typ3}} = (1,1,0,0,0,61.16, 136.7, 1.353, 5.619,0,0)^T$$
+$$\mathbf{x}_{\text{typ4}} = (1,0,0,0,0,60.08, 136.6, 1.413, 5.679,0,0)^T$$
+
+
+<<echo = TRUE, tidy=TRUE, cache=TRUE>>=
+Z_typical <- matrix(c(1,0,0,0,0,61.41, 136.5, 1.399,0,0,5.686,0,0,
+                      1,0,0,0,0,61.41, 136.5, 1.399,1,0,5.686,0,0, 
+                      1,0,0,0,0,61.41, 136.5, 1.399,0,1,5.686,0,0, 
+                      0,0,1,0,0,59.78, 136.8, 1.384,0,0,5.612,0,0,
+                      0,0,1,0,0,59.78, 136.8, 1.384,1,0,5.612,0,0,
+                      0,0,1,0,0,59.78, 136.8, 1.384,0,1,5.612,0,0,
+                      1,1,0,0,0,61.16, 136.7, 1.353,0,0,5.619,0,0,
+                      1,1,0,0,0,61.16, 136.7, 1.353,1,0,5.619,0,0,
+                      1,1,0,0,0,61.16, 136.7, 1.353,0,1,5.619,0,0,
+                      1,0,0,0,0,60.68, 136.6, 1.413,0,0,5.679,0,0,
+                      1,0,0,0,0,60.68, 136.6, 1.413,1,0,5.679,0,0,
+                      1,0,0,0,0,60.68, 136.6, 1.413,0,1,5.679,0,0), 
+                    byrow = TRUE, nrow = 12, ncol= 13)
+                      
+colnames(Z_typical) <- colnames(Z_censored)                   
+@
+
+\begin{verbatim}
+stan_code <- 
+"functions{
+  real myweibull_lpdf(real x, real eta, real alpha, real beta_0) {
+    return log(alpha) +  (alpha-1)*log(x) + (beta_0 + eta)  -
+     (x^alpha) * exp(beta_0 + eta);
+  }
+  
+  real myweibull_lccdf(real x, real eta, real alpha, real beta_0){
+    return -(x^alpha) * exp(eta + beta_0);
+  }
+}
+  
+  data {
+    int<lower=1> N_censored; // Number of censored individuals
+    int<lower=1> N_uncensored; // Number of uncensored individuals
+    int<lower=1> N_typical; // Number of typical individuals
+    int<lower=0> N_predictors;
+    vector<lower=0>[N_censored] Observed_times_censored;
+    vector<lower=0>[N_uncensored] Observed_times_uncensored;
+    matrix[N_censored, N_predictors] Z_censored;
+    matrix[N_uncensored, N_predictors] Z_uncensored;
+    matrix[N_typical, N_predictors] Z_typical;
+    real scale_alpha; //pior sd on alpha
+    real scale_beta; // prior sds on beta
+}
+
+  parameters {
+    real<lower=0> alpha; // =1/sigma sigma is the scale paramter of log weibull
+    vector[N_predictors] beta;  // regression coefficients beta vector
+    real beta_0; //intercept 
+  }
+      
+  transformed parameters {
+    vector[N_predictors] exp_beta;
+    vector[N_predictors] gamma;
+    real mu_tilda; 
+    real sigma;
+
+    exp_beta = exp(beta);
+    gamma = -beta/alpha;
+    mu_tilda = -beta_0 / alpha;
+    sigma = 1/alpha;
+    }
+      
+  model {
+    real eta;
+    row_vector[N_predictors] Z;
+    real x;
+    
+    // priors
+    alpha ~ normal(0, scale_alpha); // half normal
+    beta_0 ~ cauchy(0, scale_beta);
+    beta ~ normal(0, scale_beta);
+    
+    for (i in 1:N_censored){
+      x = Observed_times_censored[i];
+      Z = Z_censored[i];
+      eta = Z * beta;
+      target += myweibull_lccdf(x|eta, alpha, beta_0);
+    }
+    
+    for (i in 1:N_uncensored){
+      x = Observed_times_uncensored[i];
+      Z = Z_uncensored[i];
+      eta = Z * beta;
+      target += myweibull_lpdf(x|eta, alpha, beta_0);
+    }
+  }
+  generated quantities{
+  vector[N_typical] times_typical_sampled;
+    
+  for(i in 1:N_typical) {
+      times_typical_sampled[i] = exp(mu_tilda + Z_typical[i]*gamma - 
+      sigma *gumbel_rng(0,1));
+  } 
+}"
+\end{verbatim}
+
+<<echo = TRUE, tidy=TRUE, cache=TRUE, eval=FALSE>>=
+library(rstan)
+
+stan_code <- 
+"functions{
+  real myweibull_lpdf(real x, real eta, real alpha, real beta_0) {
+    return log(alpha) +  (alpha-1)*log(x) + (beta_0 + eta)  -
+     (x^alpha) * exp(beta_0 + eta);
+  }
+  
+  real myweibull_lccdf(real x, real eta, real alpha, real beta_0){
+    return -(x^alpha) * exp(eta + beta_0);
+  }
+}
+  
+  data {
+    int<lower=1> N_censored; // Number of censored individuals
+    int<lower=1> N_uncensored; // Number of uncensored individuals
+    int<lower=1> N_typical; // Number of typical individuals
+    int<lower=0> N_predictors;
+    vector<lower=0>[N_censored] Observed_times_censored;
+    vector<lower=0>[N_uncensored] Observed_times_uncensored;
+    matrix[N_censored, N_predictors] Z_censored;
+    matrix[N_uncensored, N_predictors] Z_uncensored;
+    matrix[N_typical, N_predictors] Z_typical;
+    real scale_alpha; //pior sd on alpha
+    real scale_beta; // prior sds on beta
+}
+
+  parameters {
+    real<lower=0> alpha; // =1/sigma sigma is the scale paramter of log weibull
+    vector[N_predictors] beta;  // regression coefficients beta vector
+    real beta_0; //intercept 
+  }
+      
+  transformed parameters {
+    vector[N_predictors] exp_beta;
+    vector[N_predictors] gamma;
+    real mu_tilda; 
+    real sigma;
+
+    exp_beta = exp(beta);
+    gamma = -beta/alpha;
+    mu_tilda = -beta_0 / alpha;
+    sigma = 1/alpha;
+    }
+      
+  model {
+    real eta;
+    row_vector[N_predictors] Z;
+    real x;
+    
+    // priors
+    alpha ~ normal(0, scale_alpha); // half normal
+    beta_0 ~ cauchy(0, scale_beta);
+    beta ~ normal(0, scale_beta);
+    
+    for (i in 1:N_censored){
+      x = Observed_times_censored[i];
+      Z = Z_censored[i];
+      eta = Z * beta;
+      target += myweibull_lccdf(x|eta, alpha, beta_0);
+    }
+    
+    for (i in 1:N_uncensored){
+      x = Observed_times_uncensored[i];
+      Z = Z_uncensored[i];
+      eta = Z * beta;
+      target += myweibull_lpdf(x|eta, alpha, beta_0);
+    }
+  }
+  generated quantities{
+  vector[N_typical] times_typical_sampled;
+    
+  for(i in 1:N_typical) {
+      times_typical_sampled[i] = exp(mu_tilda + Z_typical[i]*gamma - 
+      sigma *gumbel_rng(0,1));
+  } 
+}"
+
+write(stan_code, "Project.stan")
+
+model = stan_model("Project.stan")
+@
+
+<<echo = TRUE, tidy=TRUE, cache=TRUE, eval=FALSE>>=
+scale_alpha <- 10
+scale_beta <- 20
+
+model_data = list(
+  N_censored = N_censored,
+  N_uncensored = N_uncensored,
+  N_predictors = N_predictors,
+  N_typical = 12,
+  Observed_times_censored = Times_censored,
+  Observed_times_uncensored = Times_uncensored,
+  Z_censored = Z_censored,
+  Z_uncensored = Z_uncensored,
+  Z_typical = Z_typical,
+  scale_alpha = 10,
+  scale_beta = 20
+)
+
+iter= 10000
+mod_fit = sampling(model, data = model_data, warmup = floor(iter/2), 
+                   iter = iter, thin = 5, chains=5)
+
+summary_mod_fit <- summary(mod_fit)$summary
+
+params <- extract(mod_fit)
+
+save(params, file = "Stan_pos_sample.RData")
+
+save(summary_mod_fit, file = "Stan_pos_summary.RData")
+@
+
+We check convergence of parameters, with traceplot.
+<<echo = TRUE, tidy=TRUE, cache=TRUE>>=
+load("Stan_pos_sample.RData")
+
+par(mfrow = c(4, 3))
+# trace plot for alpha
+ts.plot(params$alpha)
+
+# trace plot for beta_0
+ts.plot(params$beta_0)
+
+# trace plot for betas for covariates
+ts.plot(params$beta[,1])
+ts.plot(params$beta[,2])
+ts.plot(params$beta[,3])
+ts.plot(params$beta[,4])
+ts.plot(params$beta[,5])
+ts.plot(params$beta[,6])
+ts.plot(params$beta[,7])
+ts.plot(params$beta[,8])
+ts.plot(params$beta[,9])
+
+par(mfrow = c(2, 3))
+ts.plot(params$beta[,10])
+ts.plot(params$beta[,11])
+ts.plot(params$beta[,12])
+ts.plot(params$beta[,13])
+@
+All parameters that we assume priors seems to have converegent posterior samples.
+
+<<echo = TRUE, tidy=TRUE, cache=TRUE>>=
+load("Stan_pos_summary.RData")
+round(summary_mod_fit[1:15, -c(2, 3, 5, 7)], 4)
+@
+
+$\hat{R}$ for all parameters are close to 1, and effective sample sizes are very high.
+
+<<echo = TRUE, tidy=TRUE, cache=TRUE>>=
+quantile(params$beta[,1], c(0.025, 0.975)) #Gender
+quantile(exp(params$beta[,1]), c(0.025, 0.975)) 
+quantile(params$beta[,2], c(0.025, 0.975)) #Smoking
+quantile(exp(params$beta[,2]), c(0.025, 0.975)) 
+quantile(params$beta[,3], c(0.025, 0.975)) #Diabetes
+quantile(exp(params$beta[,3]), c(0.025, 0.975)) 
+quantile(params$beta[,4], c(0.025, 0.975)) #BP
+quantile(exp(params$beta[,4]), c(0.025, 0.975)) 
+quantile(params$beta[,5], c(0.025, 0.975)) #Anaemia
+quantile(exp(params$beta[,5]), c(0.025, 0.975)) 
+
+quantile(params$beta[,6], c(0.025, 0.975)) #Age
+quantile(exp(params$beta[,6]), c(0.025, 0.975)) 
+quantile(params$beta[,7], c(0.025, 0.975)) #Sodium
+quantile(exp(params$beta[,7]), c(0.025, 0.975)) 
+quantile(params$beta[,8], c(0.025, 0.975)) #Creatinine 
+quantile(exp(params$beta[,8]), c(0.025, 0.975)) 
+quantile(params$beta[,9], c(0.025, 0.975)) #EF30to45
+quantile(exp(params$beta[,9]), c(0.025, 0.975)) 
+quantile(params$beta[,10], c(0.025, 0.975)) #EFgeq45 
+quantile(exp(params$beta[,10]), c(0.025, 0.975)) 
+
+quantile(params$beta[,11], c(0.025, 0.975)) #log_CPK
+quantile(exp(params$beta[,11]), c(0.025, 0.975)) 
+quantile(params$beta[,12], c(0.025, 0.975)) #PleteletsleqQ1
+quantile(exp(params$beta[,12]), c(0.025, 0.975)) 
+quantile(params$beta[,13], c(0.025, 0.975)) #PleteletsgeqQ3
+quantile(exp(params$beta[,13]), c(0.025, 0.975)) 
+@
+
+From 95\% posterior quantile, we conclude that blood pressure (BP), age, Serum sodium (sodium),
+Serum creatinine (creatinine), indicator of ejection fraction (EF) between 30 to 45 (EF30t45), and indicator of ejection fraction (EF) greater or equal 45 (EFgeq45) are significant factor that impact the survival experience of heart failure patients.
+
+With 95\% confidence, regarding heart failure patients, we can summarize the marginal effects of our covariates below.
+Having high blood pressure will increase mortality hazard by 1.053 to 2.522 times. 
+Being 1 year older will increase mortality hazard by 1.033 to 1.072 times.  One more unit of sodium in blood will decrease mortality hazard by 0.91 to 0.99 times. One more unit of creatinine in blood will increase mortality hazard by 1.11 to 1.46 times.
+Having EF betwen 30 and 45 (as poosed to lower than 30 will decrease mortality by 0.19 to 0.487 times.
+Having EF greater than 45 (as poosed to lower than 30 will decrease mortality by between 0.17 to 0.58 times.
+
+<<echo = TRUE, tidy=TRUE, cache=TRUE>>=
+typical1_leq30 <- c(1,0,0,0,0,61.41, 136.5, 1.399,0,0,5.686,0,0)
+typical1_30to45 <- c(1,0,0,0,0,61.41, 136.5, 1.399,1,0,5.686,0,0)
+typical1_geq45 <- c(1,0,0,0,0,61.41, 136.5, 1.399,0,1,5.686,0,0)
+library(yarrr)
+
+par(mfrow=c(1,2))
+plot( range(Heart$TIME),range(c(0,1)),type="n",xlab="time", 
+      ylab="S(t|Z)", main = "Typical male")
+for(i in 1:5000) {
+  alpha <- params$alpha[i]
+  beta0 <- params$beta_0[i]
+  beta <- params$beta[i,]
+  curve(exp(-(x^alpha) * exp(beta0 + as.numeric(beta%*%typical1_leq30))), 
+        from = 0, to = 300, add = TRUE, lwd=0.5, 
+        col=transparent("steelblue1", trans.val = .9))
+}
+
+for(i in 1:5000) {
+  alpha <- params$alpha[i]
+  beta0 <- params$beta_0[i]
+  beta <- params$beta[i,]
+  curve(exp(-(x^alpha) * exp(beta0 + as.numeric(beta%*%typical1_30to45))), 
+        from = 0, to = 300, add = TRUE, lwd=0.5, 
+        col=transparent("orangered", trans.val = 0.8))
+}
+
+for(i in 1:5000) {
+  alpha <- params$alpha[i]
+  beta0 <- params$beta_0[i]
+  beta <- params$beta[i,]
+  curve(exp(-(x^alpha) * exp(beta0 + as.numeric(beta%*%typical1_geq45))), 
+        from = 0, to = 300, add = TRUE, lwd=0.5,
+        col=transparent("yellow3", trans.val = .97))
+}
+
+alpha_pos_mean <- mean(params$alpha)
+beta0_pos_mean <- mean(params$beta_0)
+beta_pos_mean <- apply(params$beta, 2, mean)
+curve(exp(-(x^alpha_pos_mean ) * exp(beta0_pos_mean + 
+        as.numeric(beta_pos_mean%*%typical1_leq30))), 
+        from = 0, to = 300, add = TRUE, lwd=2, col="blue4")
+
+curve(exp(-(x^alpha_pos_mean ) * exp(beta0_pos_mean + 
+        as.numeric(beta_pos_mean%*%typical1_30to45))), 
+        from = 0, to = 300, add = TRUE, lwd=2, col="red")
+
+curve(exp(-(x^alpha_pos_mean) * exp(beta0_pos_mean +
+        as.numeric(beta_pos_mean%*%typical1_geq45))), 
+        from = 0, to = 300,add = TRUE, lwd=2, col="gold1")
+
+typical2_leq30 <- c(0,0,1,0,0,59.78,136.8,1.384,0,0,5.612,0,0)
+typical2_30to45 <- c(0,0,1,0,0,59.78,136.8,1.384,1,0,5.612,0,0)
+typical2_geq45 <- c(0,0,1,0,0,59.78,136.8,1.384,0,1,5.612,0,0)
+
+plot( range(Heart$TIME),range(c(0,1)),type="n",xlab="time", 
+      ylab="S(t|Z)", main = "Typical female")
+for(i in 1:5000) {
+  alpha <- params$alpha[i]
+  beta0 <- params$beta_0[i]
+  beta <- params$beta[i,]
+  curve(exp(-(x^alpha) * exp(beta0 + as.numeric(beta%*%typical2_leq30))), 
+        from = 0, to = 300, add = TRUE, lwd=0.5, 
+        col=transparent("steelblue1", trans.val = .9))
+}
+
+for(i in 1:5000) {
+  alpha <- params$alpha[i]
+  beta0 <- params$beta_0[i]
+  beta <- params$beta[i,]
+  curve(exp(-(x^alpha) * exp(beta0 + as.numeric(beta%*%typical2_30to45))), 
+        from = 0, to = 300, add = TRUE, lwd=0.5, 
+        col=transparent("orangered", trans.val = 0.8))
+}
+
+for(i in 1:5000) {
+  alpha <- params$alpha[i]
+  beta0 <- params$beta_0[i]
+  beta <- params$beta[i,]
+  curve(exp(-(x^alpha) * exp(beta0 + as.numeric(beta%*%typical2_geq45))), 
+        from = 0, to = 300, add = TRUE, lwd=0.5,
+        col=transparent("yellow3", trans.val = .97))
+}
+
+curve(exp(-(x^alpha_pos_mean ) * exp(beta0_pos_mean + 
+        as.numeric(beta_pos_mean%*%typical2_leq30))), 
+        from = 0, to = 300, add = TRUE, lwd=2, col="blue4")
+
+curve(exp(-(x^alpha_pos_mean ) * exp(beta0_pos_mean + 
+        as.numeric(beta_pos_mean%*%typical2_30to45))), 
+        from = 0, to = 300, add = TRUE, lwd=2, col="red")
+
+curve(exp(-(x^alpha_pos_mean) * exp(beta0_pos_mean +
+        as.numeric(beta_pos_mean%*%typical2_geq45))), 
+        from = 0, to = 300,add = TRUE, lwd=2, col="gold1")
+@
+
+\textbf{Note that in all plot, we use blue for $\text{EF} \leq 30$, red for $30<\text{EF} \leq 45$ and yellow for $\text{EF}>45$}\\
+
+For both typical male and female patients, EF lower than 30 has lowest survival probabilities. Other two levels of EF have nearly identical survival experiences. 
+
+Curiously, typical male patients have evidently higher survival probabilities at all levels of EF, suggesting female heart failure patients might experimence more mortality risk. 
+
+
+<<echo = TRUE, tidy=TRUE, cache=TRUE>>=
+typical3_leq30 <- c(1,1,0,0,0,61.16, 136.7, 1.353,0,0,5.619,0,0)
+typical3_30to45 <- c(1,1,0,0,0,61.16, 136.7, 1.353,1,0,5.619,0,0)
+typical3_geq45 <- c(1,1,0,0,0,61.16, 136.7, 1.353,0,1,5.619,0,0)
+
+par(mfrow=c(1,2))
+plot( range(Heart$TIME),range(c(0,1)),type="n",xlab="time", 
+      ylab="S(t|Z)", main = "Typical smoker")
+for(i in 1:5000) {
+  alpha <- params$alpha[i]
+  beta0 <- params$beta_0[i]
+  beta <- params$beta[i,]
+  curve(exp(-(x^alpha) * exp(beta0 + as.numeric(beta%*%typical3_leq30))), 
+        from = 0, to = 300, add = TRUE, lwd=0.5, 
+        col=transparent("steelblue1", trans.val = .9))
+}
+
+for(i in 1:5000) {
+  alpha <- params$alpha[i]
+  beta0 <- params$beta_0[i]
+  beta <- params$beta[i,]
+  curve(exp(-(x^alpha) * exp(beta0 + as.numeric(beta%*%typical3_30to45))), 
+        from = 0, to = 300, add = TRUE, lwd=0.5, 
+        col=transparent("orangered", trans.val = 0.8))
+}
+
+for(i in 1:5000) {
+  alpha <- params$alpha[i]
+  beta0 <- params$beta_0[i]
+  beta <- params$beta[i,]
+  curve(exp(-(x^alpha) * exp(beta0 + as.numeric(beta%*%typical3_geq45))), 
+        from = 0, to = 300, add = TRUE, lwd=0.5,
+        col=transparent("yellow3", trans.val = .97))
+}
+
+curve(exp(-(x^alpha_pos_mean ) * exp(beta0_pos_mean + 
+        as.numeric(beta_pos_mean%*%typical3_leq30))), 
+        from = 0, to = 300, add = TRUE, lwd=2, col="blue4")
+
+curve(exp(-(x^alpha_pos_mean ) * exp(beta0_pos_mean + 
+        as.numeric(beta_pos_mean%*%typical3_30to45))), 
+        from = 0, to = 300, add = TRUE, lwd=2, col="red")
+
+curve(exp(-(x^alpha_pos_mean) * exp(beta0_pos_mean +
+        as.numeric(beta_pos_mean%*%typical3_geq45))), 
+        from = 0, to = 300,add = TRUE, lwd=2, col="gold1")
+
+typical4_leq30 <- c(1,0,0,0,0,60.68, 136.6, 1.413,0,0,5.679,0,0)
+typical4_30to45 <- c(1,0,0,0,0,60.68, 136.6, 1.413,1,0,5.679,0,0)
+typical4_geq45 <- c(1,0,0,0,0,60.68, 136.6, 1.413,0,1,5.679,0,0)
+
+plot( range(Heart$TIME),range(c(0,1)),type="n",xlab="time", 
+      ylab="S(t|Z)", main="Typical non-smoker")
+for(i in 1:5000) {
+  alpha <- params$alpha[i]
+  beta0 <- params$beta_0[i]
+  beta <- params$beta[i,]
+  curve(exp(-(x^alpha) * exp(beta0 + as.numeric(beta%*%typical4_leq30))), 
+        from = 0, to = 300, add = TRUE, lwd=0.5, 
+        col=transparent("steelblue1", trans.val = .9))
+}
+
+
+for(i in 1:5000) {
+  alpha <- params$alpha[i]
+  beta0 <- params$beta_0[i]
+  beta <- params$beta[i,]
+  curve(exp(-(x^alpha) * exp(beta0 + as.numeric(beta%*%typical4_30to45))), 
+        from = 0, to = 300, add = TRUE, lwd=0.5, 
+        col=transparent("orangered", trans.val = 0.8))
+}
+
+for(i in 1:5000) {
+  alpha <- params$alpha[i]
+  beta0 <- params$beta_0[i]
+  beta <- params$beta[i,]
+  curve(exp(-(x^alpha) * exp(beta0 + as.numeric(beta%*%typical4_geq45))), 
+        from = 0, to = 300, add = TRUE, lwd=0.5,
+        col=transparent("yellow3", trans.val = .97))
+}
+
+curve(exp(-(x^alpha_pos_mean ) * exp(beta0_pos_mean + 
+        as.numeric(beta_pos_mean%*%typical4_leq30))), 
+        from = 0, to = 300, add = TRUE, lwd=2, col="blue4")
+
+curve(exp(-(x^alpha_pos_mean ) * exp(beta0_pos_mean + 
+        as.numeric(beta_pos_mean%*%typical4_30to45))), 
+        from = 0, to = 300, add = TRUE, lwd=2, col="red")
+
+curve(exp(-(x^alpha_pos_mean) * exp(beta0_pos_mean +
+        as.numeric(beta_pos_mean%*%typical4_geq45))), 
+        from = 0, to = 300,add = TRUE, lwd=2, col="gold1")
+@
+For both typical smoling and non-smoking patients, EF lower than 30 has lowest survival probabilities. Other two levels of EF have nearly identical survival experiences. 
+
+As expected, typical smoking patients have slightly (but still observablely) lower survival probabilities at all levels of EF. \\
+
+We calculate predicted probabilities that a typical male pateint outlives a typical female patient for 3 categories of ejection fraction. 
+<<echo = TRUE, tidy=TRUE, cache=TRUE>>=
+# EF less equal 30, typical male vs female
+mean(params$times_typical_sampled[,1] > params$times_typical_sampled[,4])
+
+# EF between 30 and 45, typical male vs female
+mean(params$times_typical_sampled[,2] > params$times_typical_sampled[,5])
+
+# EF greater equal 45, typical male vs female
+mean(params$times_typical_sampled[,3] > params$times_typical_sampled[,6])
+@
+Typical male patient has more than 50\% chance outlives typical female patient for all 3 categories of EF.
+
+
+Then, we calculate predicted probabilities that a typical male pateint outlives a typical female patient for 3 categories of ejection fraction.
+<<echo = TRUE, tidy=TRUE, cache=TRUE>>=
+# EF less equal 30, typical smoking vs non-soking
+mean(params$times_typical_sampled[,7] > params$times_typical_sampled[,10])
+
+# EF between 30 and 45, smoking vs non-soking
+mean(params$times_typical_sampled[,8] > params$times_typical_sampled[,11])
+
+# EF greater equal 45, smoking vs non-soking
+mean(params$times_typical_sampled[,9] > params$times_typical_sampled[,12])
+@
+A typical non-smoking patient has slightly over 50\% chance to outlive a typical smoking patient for all 3 categories of EF.
+
+At last, for further comparison, we also report the predicted survival times for all the typical individuals.
+<<echo = TRUE, tidy=TRUE, cache=TRUE>>=
+## EF less equal 30, typical male vs female
+apply(params$times_typical_sampled[,c(1:12)], 2, mean)[1]
+apply(params$times_typical_sampled[,c(1:12)], 2, mean)[4]
+
+# EF between 30 and 45, typical male vs female
+apply(params$times_typical_sampled[,c(1:12)], 2, mean)[2]
+apply(params$times_typical_sampled[,c(1:12)], 2, mean)[5]
+
+# EF greater equal 45, typical male vs female
+apply(params$times_typical_sampled[,c(1:12)], 2, mean)[3]
+apply(params$times_typical_sampled[,c(1:12)], 2, mean)[6]
+@
+
+<<echo = TRUE, tidy=TRUE, cache=TRUE>>=
+# EF less equal 30, typical smoking vs non-soking
+apply(params$times_typical_sampled[,c(1:12)], 2, mean)[7]
+apply(params$times_typical_sampled[,c(1:12)], 2, mean)[10]
+
+# EF between 30 and 45, smoking vs non-soking
+apply(params$times_typical_sampled[,c(1:12)], 2, mean)[8]
+apply(params$times_typical_sampled[,c(1:12)], 2, mean)[11]
+
+# EF greater equal 45, smoking vs non-soking
+apply(params$times_typical_sampled[,c(1:12)], 2, mean)[9]
+apply(params$times_typical_sampled[,c(1:12)], 2, mean)[12]
+@
+
+\section{Model fitting with concentrated prior and analysis}
+
+We want to rerun our analysis with more concentrated prior, we base our concentrated prior by running the semiparametric cox regression (no baseline hazard assumed). If the weibull baseline hazard assumption is correct (or at least reasonable), the frequentist estimates of less restrictive semiparametric Cox regression will serve as a meaningful source of prior information for the bayesian analysis based on a more restrictive parametric Cox model.
+
+<<echo = TRUE, tidy=TRUE, cache=TRUE>>=
+Heart_cox <- read.csv("Heart_cox.csv")
+library(survival)
+cox_fit <- coxph(Surv(TIME, Event)~Gender + Smoking + Diabetes + BP + Anaemia +
+                 + Age + Sodium + Creatinine  + EF30to45 +  EFgeq45   + log_CPK +
+                   PleteletsleqQ1 + PleteletsgeqQ3, data=Heart_cox)
+
+summary(cox_fit)$coef
+
+scale_beta <- summary(cox_fit)$coef[,3] * 10
+mean_beta <- summary(cox_fit)$coef[,1]
+@
+
+We will choose to set the prior standard deviation of each coefficient to be 10 times the se(coef) (a lot more information than unit information prior but a lot less than full information prior based on all 299 subjects) reported by frequentist estimation.
+We keep using diffuse priors for auxiliary parameters, i.e. $\beta_0$ and $\alpha$.
+\begin{verbatim}
+stan_code <- 
+"functions{
+  real myweibull_lpdf(real x, real eta, real alpha, real beta_0) {
+    return log(alpha) +  (alpha-1)*log(x) + (beta_0 + eta)  -
+     (x^alpha) * exp(beta_0 + eta);
+  }
+  
+  real myweibull_lccdf(real x, real eta, real alpha, real beta_0){
+    return -(x^alpha) * exp(eta + beta_0);
+  }
+}
+  
+  data {
+    int<lower=1> N_censored; // Number of censored individuals
+    int<lower=1> N_uncensored; // Number of uncensored individuals
+    int<lower=1> N_typical; // Number of typical individuals
+    int<lower=0> N_predictors;
+    vector<lower=0>[N_censored] Observed_times_censored;
+    vector<lower=0>[N_uncensored] Observed_times_uncensored;
+    matrix[N_censored, N_predictors] Z_censored;
+    matrix[N_uncensored, N_predictors] Z_uncensored;
+    matrix[N_typical, N_predictors] Z_typical;
+    real scale_alpha; //pior sd on alpha
+    vector[N_predictors] scale_beta; // prior sds on beta
+    vector[N_predictors] mean_beta; // prior means on beta
+    real scale_beta0; //prior sd on beta0
+}
+
+  parameters {
+    real<lower=0> alpha; // =1/sigma sigma is the scale paramter of log weibull
+    vector[N_predictors] beta;  // regression coefficients beta vector
+    real beta_0; //intercept 
+  }
+      
+  transformed parameters {
+    vector[N_predictors] exp_beta;
+    vector[N_predictors] gamma;
+    real mu_tilda; 
+    real sigma;
+
+    exp_beta = exp(beta);
+    gamma = -beta/alpha;
+    mu_tilda = -beta_0 / alpha;
+    sigma = 1/alpha;
+    }
+      
+  model {
+    real eta;
+    row_vector[N_predictors] Z;
+    real x;
+    
+    // priors
+    alpha ~ normal(0, scale_alpha); // half normal
+    beta_0 ~ cauchy(0, scale_beta);
+    
+    for (i in 1:N_predictors) {
+     beta[i] ~ normal(mean_beta[i], scale_beta[i]);
+    }
+   
+    for (i in 1:N_censored){
+      x = Observed_times_censored[i];
+      Z = Z_censored[i];
+      eta = Z * beta;
+      target += myweibull_lccdf(x|eta, alpha, beta_0);
+    }
+    
+    for (i in 1:N_uncensored){
+      x = Observed_times_uncensored[i];
+      Z = Z_uncensored[i];
+      eta = Z * beta;
+      target += myweibull_lpdf(x|eta, alpha, beta_0);
+    }
+  }
+  generated quantities{
+  vector[N_typical] times_typical_sampled;
+    
+  for(i in 1:N_typical) {
+      times_typical_sampled[i] = exp(mu_tilda + Z_typical[i]*gamma - 
+      sigma *gumbel_rng(0,1));
+  } 
+}"
+\end{verbatim}
+
+<<echo = TRUE, tidy=TRUE, cache=TRUE, eval=FALSE, echo=FALSE>>=
+library(rstan)
+
+stan_code2 <- 
+"functions{
+  real myweibull_lpdf(real x, real eta, real alpha, real beta_0) {
+    return log(alpha) +  (alpha-1)*log(x) + (beta_0 + eta)  -
+     (x^alpha) * exp(beta_0 + eta);
+  }
+  
+  real myweibull_lccdf(real x, real eta, real alpha, real beta_0){
+    return -(x^alpha) * exp(eta + beta_0);
+  }
+}
+  
+  data {
+    int<lower=1> N_censored; // Number of censored individuals
+    int<lower=1> N_uncensored; // Number of uncensored individuals
+    int<lower=1> N_typical; // Number of typical individuals
+    int<lower=0> N_predictors;
+    vector<lower=0>[N_censored] Observed_times_censored;
+    vector<lower=0>[N_uncensored] Observed_times_uncensored;
+    matrix[N_censored, N_predictors] Z_censored;
+    matrix[N_uncensored, N_predictors] Z_uncensored;
+    matrix[N_typical, N_predictors] Z_typical;
+    real scale_alpha; //pior sd on alpha
+    vector[N_predictors] scale_beta; // prior sds on beta
+    vector[N_predictors] mean_beta; // prior means on beta
+    real scale_beta0; //prior sd on beta0
+}
+
+  parameters {
+    real<lower=0> alpha; // =1/sigma sigma is the scale paramter of log weibull
+    vector[N_predictors] beta;  // regression coefficients beta vector
+    real beta_0; //intercept 
+  }
+      
+  transformed parameters {
+    vector[N_predictors] exp_beta;
+    vector[N_predictors] gamma;
+    real mu_tilda; 
+    real sigma;
+
+    exp_beta = exp(beta);
+    gamma = -beta/alpha;
+    mu_tilda = -beta_0 / alpha;
+    sigma = 1/alpha;
+    }
+      
+  model {
+    real eta;
+    row_vector[N_predictors] Z;
+    real x;
+    
+    // priors
+    alpha ~ normal(0, scale_alpha); // half normal
+    beta_0 ~ cauchy(0, scale_beta);
+    
+    for (i in 1:N_predictors) {
+     beta[i] ~ normal(mean_beta[i], scale_beta[i]);
+    }
+   
+    for (i in 1:N_censored){
+      x = Observed_times_censored[i];
+      Z = Z_censored[i];
+      eta = Z * beta;
+      target += myweibull_lccdf(x|eta, alpha, beta_0);
+    }
+    
+    for (i in 1:N_uncensored){
+      x = Observed_times_uncensored[i];
+      Z = Z_uncensored[i];
+      eta = Z * beta;
+      target += myweibull_lpdf(x|eta, alpha, beta_0);
+    }
+  }
+  generated quantities{
+  vector[N_typical] times_typical_sampled;
+    
+  for(i in 1:N_typical) {
+      times_typical_sampled[i] = exp(mu_tilda + Z_typical[i]*gamma - 
+      sigma *gumbel_rng(0,1));
+  } 
+}"
+
+write(stan_code2, "Project2.stan")
+
+model2 = stan_model("Project2.stan")
+@
+
+<<echo = TRUE, tidy=TRUE, cache=TRUE, eval=FALSE, echo=FALSE>>=
+model_data = list(
+  N_censored = N_censored,
+  N_uncensored = N_uncensored,
+  N_predictors = N_predictors,
+  N_typical = 12,
+  Observed_times_censored = Times_censored,
+  Observed_times_uncensored = Times_uncensored,
+  Z_censored = Z_censored,
+  Z_uncensored = Z_uncensored,
+  Z_typical = Z_typical,
+  scale_alpha = 10,
+  scale_beta0 = 20,
+  scale_beta = scale_beta,
+  mean_beta = mean_beta
+)
+
+iter= 10000
+mod_fit2 = sampling(model2, data = model_data, warmup = floor(iter/2), 
+                   iter = iter, thin = 5, chains=5)
+
+summary_mod_fit2 <- summary(mod_fit2)$summary
+
+params2 <- extract(mod_fit2)
+
+save(params2, file = "Stan_pos_sample2.RData")
+
+save(summary_mod_fit2, file = "Stan_pos_summary2.RData")
+@
+
+We check convergence of parameters, with traceplot.
+<<echo = TRUE, tidy=TRUE, cache=TRUE>>=
+load("Stan_pos_sample2.RData")
+params <- params2
+
+par(mfrow = c(4, 3))
+# trace plot for alpha
+ts.plot(params$alpha)
+
+# trace plot for beta_0
+ts.plot(params$beta_0)
+
+# trace plot for betas for covariates
+ts.plot(params$beta[,1])
+ts.plot(params$beta[,2])
+ts.plot(params$beta[,3])
+ts.plot(params$beta[,4])
+ts.plot(params$beta[,5])
+ts.plot(params$beta[,6])
+ts.plot(params$beta[,7])
+ts.plot(params$beta[,8])
+ts.plot(params$beta[,9])
+
+par(mfrow = c(2, 3))
+ts.plot(params$beta[,10])
+ts.plot(params$beta[,11])
+ts.plot(params$beta[,12])
+ts.plot(params$beta[,13])
+@
+All parameters that we assume priors seems to have converegent posterior samples.
+
+<<echo = TRUE, tidy=TRUE, cache=TRUE, echo=FALSE>>=
+load("Stan_pos_summary2.RData")
+round(summary_mod_fit2[1:15, -c(2, 3, 5, 7)], 4)
+@
+
+$\hat{R}$ for all parameters are close to 1, and effective sample sizes are very high.
+
+<<echo = TRUE, tidy=TRUE, cache=TRUE>>=
+quantile(params$beta[,1], c(0.025, 0.975)) #Gender
+quantile(exp(params$beta[,1]), c(0.025, 0.975)) 
+quantile(params$beta[,2], c(0.025, 0.975)) #Smoking
+quantile(exp(params$beta[,2]), c(0.025, 0.975)) 
+quantile(params$beta[,3], c(0.025, 0.975)) #Diabetes
+quantile(exp(params$beta[,3]), c(0.025, 0.975)) 
+quantile(params$beta[,4], c(0.025, 0.975)) #BP
+quantile(exp(params$beta[,4]), c(0.025, 0.975)) 
+quantile(params$beta[,5], c(0.025, 0.975)) #Anaemia
+quantile(exp(params$beta[,5]), c(0.025, 0.975)) 
+
+quantile(params$beta[,6], c(0.025, 0.975)) #Age
+quantile(exp(params$beta[,6]), c(0.025, 0.975)) 
+quantile(params$beta[,7], c(0.025, 0.975)) #Sodium
+quantile(exp(params$beta[,7]), c(0.025, 0.975)) 
+quantile(params$beta[,8], c(0.025, 0.975)) #Creatinine 
+quantile(exp(params$beta[,8]), c(0.025, 0.975)) 
+quantile(params$beta[,9], c(0.025, 0.975)) #EF30to45
+quantile(exp(params$beta[,9]), c(0.025, 0.975)) 
+quantile(params$beta[,10], c(0.025, 0.975)) #EFgeq45 
+quantile(exp(params$beta[,10]), c(0.025, 0.975)) 
+
+quantile(params$beta[,11], c(0.025, 0.975)) #log_CPK
+quantile(exp(params$beta[,11]), c(0.025, 0.975)) 
+quantile(params$beta[,12], c(0.025, 0.975)) #PleteletsleqQ1
+quantile(exp(params$beta[,12]), c(0.025, 0.975)) 
+quantile(params$beta[,13], c(0.025, 0.975)) #PleteletsgeqQ3
+quantile(exp(params$beta[,13]), c(0.025, 0.975)) 
+@
+
+\textbf{The result here agrees with the result with diffuse prior}
+From 95\% posterior quantile, we conclude that blood pressure (BP), age, Serum sodium (sodium),
+Serum creatinine (creatinine), indicator of ejection fraction (EF) between 30 to 45 (EF30t45), and indicator of ejection fraction (EF) greater or equal 45 (EFgeq45) are significant factor that impact the survival experience of heart failure patients.
+
+Interval interpretions about exp(coefficients) can be done as before. 
+
+<<echo = TRUE, tidy=TRUE, cache=TRUE, echo=FALSE>>=
+typical1_leq30 <- c(1,0,0,0,0,61.41, 136.5, 1.399,0,0,5.686,0,0)
+typical1_30to45 <- c(1,0,0,0,0,61.41, 136.5, 1.399,1,0,5.686,0,0)
+typical1_geq45 <- c(1,0,0,0,0,61.41, 136.5, 1.399,0,1,5.686,0,0)
+library(yarrr)
+
+par(mfrow=c(1,2))
+plot( range(Heart$TIME),range(c(0,1)),type="n",xlab="time", 
+      ylab="S(t|Z)", main = "Typical male")
+for(i in 1:5000) {
+  alpha <- params$alpha[i]
+  beta0 <- params$beta_0[i]
+  beta <- params$beta[i,]
+  curve(exp(-(x^alpha) * exp(beta0 + as.numeric(beta%*%typical1_leq30))), 
+        from = 0, to = 300, add = TRUE, lwd=0.5, 
+        col=transparent("steelblue1", trans.val = .9))
+}
+
+for(i in 1:5000) {
+  alpha <- params$alpha[i]
+  beta0 <- params$beta_0[i]
+  beta <- params$beta[i,]
+  curve(exp(-(x^alpha) * exp(beta0 + as.numeric(beta%*%typical1_30to45))), 
+        from = 0, to = 300, add = TRUE, lwd=0.5, 
+        col=transparent("orangered", trans.val = 0.8))
+}
+
+for(i in 1:5000) {
+  alpha <- params$alpha[i]
+  beta0 <- params$beta_0[i]
+  beta <- params$beta[i,]
+  curve(exp(-(x^alpha) * exp(beta0 + as.numeric(beta%*%typical1_geq45))), 
+        from = 0, to = 300, add = TRUE, lwd=0.5,
+        col=transparent("yellow3", trans.val = .97))
+}
+
+alpha_pos_mean <- mean(params$alpha)
+beta0_pos_mean <- mean(params$beta_0)
+beta_pos_mean <- apply(params$beta, 2, mean)
+curve(exp(-(x^alpha_pos_mean ) * exp(beta0_pos_mean + 
+        as.numeric(beta_pos_mean%*%typical1_leq30))), 
+        from = 0, to = 300, add = TRUE, lwd=2, col="blue4")
+
+curve(exp(-(x^alpha_pos_mean ) * exp(beta0_pos_mean + 
+        as.numeric(beta_pos_mean%*%typical1_30to45))), 
+        from = 0, to = 300, add = TRUE, lwd=2, col="red")
+
+curve(exp(-(x^alpha_pos_mean) * exp(beta0_pos_mean +
+        as.numeric(beta_pos_mean%*%typical1_geq45))), 
+        from = 0, to = 300,add = TRUE, lwd=2, col="gold1")
+
+typical2_leq30 <- c(0,0,1,0,0,59.78,136.8,1.384,0,0,5.612,0,0)
+typical2_30to45 <- c(0,0,1,0,0,59.78,136.8,1.384,1,0,5.612,0,0)
+typical2_geq45 <- c(0,0,1,0,0,59.78,136.8,1.384,0,1,5.612,0,0)
+
+plot( range(Heart$TIME),range(c(0,1)),type="n",xlab="time", 
+      ylab="S(t|Z)", main = "Typical female")
+for(i in 1:5000) {
+  alpha <- params$alpha[i]
+  beta0 <- params$beta_0[i]
+  beta <- params$beta[i,]
+  curve(exp(-(x^alpha) * exp(beta0 + as.numeric(beta%*%typical2_leq30))), 
+        from = 0, to = 300, add = TRUE, lwd=0.5, 
+        col=transparent("steelblue1", trans.val = .9))
+}
+
+for(i in 1:5000) {
+  alpha <- params$alpha[i]
+  beta0 <- params$beta_0[i]
+  beta <- params$beta[i,]
+  curve(exp(-(x^alpha) * exp(beta0 + as.numeric(beta%*%typical2_30to45))), 
+        from = 0, to = 300, add = TRUE, lwd=0.5, 
+        col=transparent("orangered", trans.val = 0.8))
+}
+
+for(i in 1:5000) {
+  alpha <- params$alpha[i]
+  beta0 <- params$beta_0[i]
+  beta <- params$beta[i,]
+  curve(exp(-(x^alpha) * exp(beta0 + as.numeric(beta%*%typical2_geq45))), 
+        from = 0, to = 300, add = TRUE, lwd=0.5,
+        col=transparent("yellow3", trans.val = .97))
+}
+
+curve(exp(-(x^alpha_pos_mean ) * exp(beta0_pos_mean + 
+        as.numeric(beta_pos_mean%*%typical2_leq30))), 
+        from = 0, to = 300, add = TRUE, lwd=2, col="blue4")
+
+curve(exp(-(x^alpha_pos_mean ) * exp(beta0_pos_mean + 
+        as.numeric(beta_pos_mean%*%typical2_30to45))), 
+        from = 0, to = 300, add = TRUE, lwd=2, col="red")
+
+curve(exp(-(x^alpha_pos_mean) * exp(beta0_pos_mean +
+        as.numeric(beta_pos_mean%*%typical2_geq45))), 
+        from = 0, to = 300,add = TRUE, lwd=2, col="gold1")
+@
+
+Our previous conclusions about survival curves for typical male vs female stand. 
+
+<<echo = TRUE, tidy=TRUE, cache=TRUE, echo=FALSE>>=
+typical3_leq30 <- c(1,1,0,0,0,61.16, 136.7, 1.353,0,0,5.619,0,0)
+typical3_30to45 <- c(1,1,0,0,0,61.16, 136.7, 1.353,1,0,5.619,0,0)
+typical3_geq45 <- c(1,1,0,0,0,61.16, 136.7, 1.353,0,1,5.619,0,0)
+
+par(mfrow=c(1,2))
+plot( range(Heart$TIME),range(c(0,1)),type="n",xlab="time", 
+      ylab="S(t|Z)", main = "Typical smoker")
+for(i in 1:5000) {
+  alpha <- params$alpha[i]
+  beta0 <- params$beta_0[i]
+  beta <- params$beta[i,]
+  curve(exp(-(x^alpha) * exp(beta0 + as.numeric(beta%*%typical3_leq30))), 
+        from = 0, to = 300, add = TRUE, lwd=0.5, 
+        col=transparent("steelblue1", trans.val = .9))
+}
+
+for(i in 1:5000) {
+  alpha <- params$alpha[i]
+  beta0 <- params$beta_0[i]
+  beta <- params$beta[i,]
+  curve(exp(-(x^alpha) * exp(beta0 + as.numeric(beta%*%typical3_30to45))), 
+        from = 0, to = 300, add = TRUE, lwd=0.5, 
+        col=transparent("orangered", trans.val = 0.8))
+}
+
+for(i in 1:5000) {
+  alpha <- params$alpha[i]
+  beta0 <- params$beta_0[i]
+  beta <- params$beta[i,]
+  curve(exp(-(x^alpha) * exp(beta0 + as.numeric(beta%*%typical3_geq45))), 
+        from = 0, to = 300, add = TRUE, lwd=0.5,
+        col=transparent("yellow3", trans.val = .97))
+}
+
+curve(exp(-(x^alpha_pos_mean ) * exp(beta0_pos_mean + 
+        as.numeric(beta_pos_mean%*%typical3_leq30))), 
+        from = 0, to = 300, add = TRUE, lwd=2, col="blue4")
+
+curve(exp(-(x^alpha_pos_mean ) * exp(beta0_pos_mean + 
+        as.numeric(beta_pos_mean%*%typical3_30to45))), 
+        from = 0, to = 300, add = TRUE, lwd=2, col="red")
+
+curve(exp(-(x^alpha_pos_mean) * exp(beta0_pos_mean +
+        as.numeric(beta_pos_mean%*%typical3_geq45))), 
+        from = 0, to = 300,add = TRUE, lwd=2, col="gold1")
+
+typical4_leq30 <- c(1,0,0,0,0,60.68, 136.6, 1.413,0,0,5.679,0,0)
+typical4_30to45 <- c(1,0,0,0,0,60.68, 136.6, 1.413,1,0,5.679,0,0)
+typical4_geq45 <- c(1,0,0,0,0,60.68, 136.6, 1.413,0,1,5.679,0,0)
+
+plot( range(Heart$TIME),range(c(0,1)),type="n",xlab="time", 
+      ylab="S(t|Z)", main="Typical non-smoker")
+for(i in 1:5000) {
+  alpha <- params$alpha[i]
+  beta0 <- params$beta_0[i]
+  beta <- params$beta[i,]
+  curve(exp(-(x^alpha) * exp(beta0 + as.numeric(beta%*%typical4_leq30))), 
+        from = 0, to = 300, add = TRUE, lwd=0.5, 
+        col=transparent("steelblue1", trans.val = .9))
+}
+
+
+for(i in 1:5000) {
+  alpha <- params$alpha[i]
+  beta0 <- params$beta_0[i]
+  beta <- params$beta[i,]
+  curve(exp(-(x^alpha) * exp(beta0 + as.numeric(beta%*%typical4_30to45))), 
+        from = 0, to = 300, add = TRUE, lwd=0.5, 
+        col=transparent("orangered", trans.val = 0.8))
+}
+
+for(i in 1:5000) {
+  alpha <- params$alpha[i]
+  beta0 <- params$beta_0[i]
+  beta <- params$beta[i,]
+  curve(exp(-(x^alpha) * exp(beta0 + as.numeric(beta%*%typical4_geq45))), 
+        from = 0, to = 300, add = TRUE, lwd=0.5,
+        col=transparent("yellow3", trans.val = .97))
+}
+
+curve(exp(-(x^alpha_pos_mean ) * exp(beta0_pos_mean + 
+        as.numeric(beta_pos_mean%*%typical4_leq30))), 
+        from = 0, to = 300, add = TRUE, lwd=2, col="blue4")
+
+curve(exp(-(x^alpha_pos_mean ) * exp(beta0_pos_mean + 
+        as.numeric(beta_pos_mean%*%typical4_30to45))), 
+        from = 0, to = 300, add = TRUE, lwd=2, col="red")
+
+curve(exp(-(x^alpha_pos_mean) * exp(beta0_pos_mean +
+        as.numeric(beta_pos_mean%*%typical4_geq45))), 
+        from = 0, to = 300,add = TRUE, lwd=2, col="gold1")
+@
+
+Our previous conclusions about survival curves for typical smoker vs non-smoker stand. \\
+
+We calculate predicted probabilities that a typical male pateint outlives a typical female patient for 3 categories of EF. 
+<<echo = TRUE, tidy=TRUE, cache=TRUE, echo=FALSE>>=
+# EF less equal 30, typical male vs female
+mean(params$times_typical_sampled[,1] > params$times_typical_sampled[,4])
+
+# EF between 30 and 45, typical male vs female
+mean(params$times_typical_sampled[,2] > params$times_typical_sampled[,5])
+
+# EF greater equal 45, typical male vs female
+mean(params$times_typical_sampled[,3] > params$times_typical_sampled[,6])
+@
+
+We calculate predicted probabilities that a typical smoking patient outlives a typical non-smoking patient for 3 categories of EF. 
+<<echo = TRUE, tidy=TRUE, cache=TRUE, echo=FALSE>>=
+# EF less equal 30, typical male vs female
+mean(params$times_typical_sampled[,7] > params$times_typical_sampled[,10])
+
+# EF between 30 and 45, typical male vs female
+mean(params$times_typical_sampled[,8] > params$times_typical_sampled[,11])
+
+# EF greater equal 45, typical male vs female
+mean(params$times_typical_sampled[,9] > params$times_typical_sampled[,12])
+@
+
+At last, for further comparison, we also report the predicted survival times for all the typical individuals.
+<<echo = TRUE, tidy=TRUE, cache=TRUE, echo=FALSE>>=
+## EF less equal 30, typical male vs female
+apply(params$times_typical_sampled[,c(1:12)], 2, mean)[1]
+apply(params$times_typical_sampled[,c(1:12)], 2, mean)[4]
+
+# EF between 30 and 45, typical male vs female
+apply(params$times_typical_sampled[,c(1:12)], 2, mean)[2]
+apply(params$times_typical_sampled[,c(1:12)], 2, mean)[5]
+
+# EF greater equal 45, typical male vs female
+apply(params$times_typical_sampled[,c(1:12)], 2, mean)[3]
+apply(params$times_typical_sampled[,c(1:12)], 2, mean)[6]
+@
+
+<<echo = TRUE, tidy=TRUE, cache=TRUE, echo=FALSE>>=
+# EF less equal 30, typical smoking vs non-soking
+apply(params$times_typical_sampled[,c(1:12)], 2, mean)[7]
+apply(params$times_typical_sampled[,c(1:12)], 2, mean)[10]
+
+# EF between 30 and 45, smoking vs non-soking
+apply(params$times_typical_sampled[,c(1:12)], 2, mean)[8]
+apply(params$times_typical_sampled[,c(1:12)], 2, mean)[11]
+
+# EF greater equal 45, smoking vs non-soking
+apply(params$times_typical_sampled[,c(1:12)], 2, mean)[9]
+apply(params$times_typical_sampled[,c(1:12)], 2, mean)[12]
+@
+
+The result is similar as before. 
+
+\textbf{The conclusion based on these probabilities  essentially agree with previous analysis with diffuse prior.}
+
+\section{Future directions}
+In this project, following the paper of Ahmed et al. (2017), we do not model interactions of covariates, so some of the consistencies in our conclusions are from our modelling assumptions rather than the reality. Therefore, our conclusions should be considered an initial insight rather than a well established result. It is importance to check the existence of interactions, take them into account and compare with our current result, but this is left as something to be done in the future. 
+
+\section{References}
+Ahmad, Tanvir, et al. "Survival analysis of heart failure patients: A case study." PloS one 12.7 (2017): e0181001.\\
+\\
+Brilleman, Samuel L., et al. "Bayesian survival analysis using the rstanarm R package." arXiv preprint arXiv:2002.09633 (2020).\\
+\\
+Klein, John P., and Melvin L. Moeschberger. Survival analysis: techniques for censored and truncated data. Vol. 1230. New York: Springer, 2003.
+
+
+
+\end{document}
